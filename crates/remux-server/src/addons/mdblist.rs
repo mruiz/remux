@@ -189,6 +189,16 @@ fn sync_body(target: &MediaTrackerTarget, leaf: Value) -> Option<Value> {
                 "seasons": [{ "number": target.season?, "episodes": [item] }],
             }]}))
         }
+        db::MediaKind::Season => {
+            let series = target
+                .series
+                .as_ref()?;
+            item["number"] = json!(target.season?);
+            Some(json!({ "shows": [{
+                "ids": ids_json(&series.ids)?,
+                "seasons": [item],
+            }]}))
+        }
         _ => None,
     }
 }
@@ -436,6 +446,20 @@ mod tests {
         assert_eq!(
             scrobble_body(&episode(), 0.0).unwrap()["show"],
             json!({ "ids": { "imdb": "tt1", "tmdb": 1396 }, "season": 1, "episode": 2 })
+        );
+    }
+
+    #[test]
+    fn a_season_syncs_nested_under_its_show() {
+        let mut season = episode();
+        season.kind = db::MediaKind::Season;
+        season.episode = None;
+        assert_eq!(
+            sync_body(&season, json!({ "watched_at": "t" })).unwrap(),
+            json!({ "shows": [{
+                "ids": { "imdb": "tt1", "tmdb": 1396 },
+                "seasons": [{ "watched_at": "t", "number": 1 }],
+            }]})
         );
     }
 

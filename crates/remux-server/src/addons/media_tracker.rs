@@ -191,7 +191,7 @@ pub struct MediaTrackerTarget {
     pub title: String,
     pub year: Option<i32>,
     pub ids: db::ExternalIds,
-    /// Set for episodes: the parent series' title, year and ids.
+    /// Set for episodes and seasons: the parent series' title, year and ids.
     pub series: Option<Box<MediaTrackerTarget>>,
     pub season: Option<i64>,
     pub episode: Option<i64>,

@@ -16,6 +16,12 @@ use crate::{
 };
 
 fn describe(media: &db::Media, series: Option<&db::Media>) -> MediaTrackerTarget {
+    // A season row keeps its own number in `idx`; an episode keeps its
+    // season's in `parent_idx`.
+    let (season, episode) = match media.kind {
+        db::MediaKind::Season => (media.idx, None),
+        _ => (media.parent_idx, media.idx),
+    };
     MediaTrackerTarget {
         kind: media
             .kind
@@ -30,17 +36,17 @@ fn describe(media: &db::Media, series: Option<&db::Media>) -> MediaTrackerTarget
             .external_ids
             .clone(),
         series: series.map(|s| Box::new(describe(s, None))),
-        season: media.parent_idx,
-        episode: media.idx,
+        season,
+        episode,
         runtime: media.runtime,
     }
 }
 
-/// The series an episode hangs off. The ancestor walk follows `parent_id`, so
-/// an episode saved without a season row above it falls back to the
-/// `grandparent_id` its row names, which `Media::validate` requires of it.
+/// The series an episode or season hangs off. The ancestor walk follows
+/// `parent_id`, so an episode saved without a season row above it falls back
+/// to the `grandparent_id` its row names, which `Media::validate` requires of it.
 async fn series_of(ctx: &AppContext, media: &db::Media) -> Result<Option<db::Media>> {
-    if media.kind != db::MediaKind::Episode {
+    if !matches!(media.kind, db::MediaKind::Episode | db::MediaKind::Season) {
         return Ok(None);
     }
     if let Some(series) = db::Media::get_ancestors(&ctx.db, &media.id)
@@ -421,6 +427,66 @@ mod tests {
             target
                 .series
                 .expect("no season row is not no series")
+                .ids
+                .tmdb,
+            Some(1438)
+        );
+    }
+
+    /// A season names the show it belongs to and its own number, which it
+    /// keeps in `idx` rather than `parent_idx`.
+    #[tokio::test]
+    async fn a_season_reaches_its_series_with_its_own_number() {
+        let (_s, guard) = new_test_server()
+            .await
+            .unwrap();
+        let ctx = &guard.0;
+
+        let external_ids = db::ExternalIds {
+            tmdb: Some(1438),
+            ..Default::default()
+        };
+        let mut series = db::Media {
+            id: Uuid::from(&db::MediaIdRaw {
+                kind: db::MediaKind::Series,
+                external_ids: external_ids.clone(),
+                season: None,
+                episode: None,
+            }),
+            title: "The Wire".into(),
+            kind: db::MediaKind::Series,
+            external_ids,
+            ..Default::default()
+        };
+        series
+            .save(&ctx.db)
+            .await
+            .unwrap();
+
+        let mut season = db::Media {
+            title: "Season 2".into(),
+            kind: db::MediaKind::Season,
+            parent_id: Some(series.id),
+            grandparent_id: Some(series.id),
+            idx: Some(2),
+            ..Default::default()
+        };
+        season
+            .save(&ctx.db)
+            .await
+            .unwrap();
+
+        let target = resolve_target(ctx, &mut season)
+            .await
+            .unwrap()
+            .expect("a season of a known show is matchable");
+
+        assert_eq!(target.season, Some(2));
+        assert_eq!(target.episode, None);
+        assert_eq!(
+            target
+                .series
+                .expect("a season carries its show")
                 .ids
                 .tmdb,
             Some(1438)
