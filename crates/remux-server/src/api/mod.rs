@@ -18,6 +18,7 @@ pub mod livetv;
 pub mod localization;
 pub mod logs;
 pub mod lyrics;
+pub mod media_trackers;
 pub mod metadata;
 pub mod movies;
 pub mod music;

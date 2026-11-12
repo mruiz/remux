@@ -1,10 +1,11 @@
 use crate::{components::*, pages::streams::StreamFilterEditor, state::AppState};
 use dioxus::prelude::*;
 use remux_sdks::remux::{
-    AddonDto, AdminSetPassword, CollectionFilter, CreateUser, DeleteUser, FilterGroup,
-    FilterMatchMode, FilterRule, GetUserAddons, GetUsers, ListAddons, SetUserAddons,
-    StreamFilter, StreamRule, SubtitleMode, UpdateUser, UpdateUserConfiguration,
-    UpdateUserPolicy, UserConfiguration, UserDto,
+    AddonDto, AdminSetPassword, CollectionFilter, ConnectUserMediaTracker, CreateUser,
+    DeleteUser, DisconnectUserMediaTracker, FilterGroup, FilterMatchMode, FilterRule,
+    GetUserAddons, GetUserMediaTrackers, GetUsers, ListAddons, MediaTrackerDto,
+    SetUserAddons, StreamFilter, StreamRule, SubtitleMode, UpdateUser,
+    UpdateUserConfiguration, UpdateUserPolicy, UserConfiguration, UserDto,
 };
 use uuid::Uuid;
 
@@ -355,6 +356,7 @@ pub fn UserForm(
         .as_ref()
         .map(|u| u.id);
     let addon_client = app_state.clone();
+    let tracker_state = app_state.clone();
     use_effect(move || {
         let Some(uid) = edit_user_id else {
             return;
@@ -934,6 +936,10 @@ pub fn UserForm(
                 }
             }
 
+            if let Some(uid) = edit_user_id {
+                MediaTrackersSection { app_state: tracker_state.clone(), user_id: uid }
+            }
+
             if let Some(e) = err.read().as_ref() {
                 ErrorAlert { message: e.clone() }
             }
@@ -951,6 +957,120 @@ pub fn UserForm(
                     disabled: *saving.read(),
                     if *saving.read() { "Saving…" } else { "Save" }
                 }
+            }
+        }
+    }
+}
+
+/// The user's media tracker connections (MDBList, ...). Lives inside the user
+/// form, so it uses no `form` of its own and only `type="button"` buttons.
+#[component]
+fn MediaTrackersSection(app_state: AppState, user_id: Uuid) -> Element {
+    let mut trackers: Signal<Vec<MediaTrackerDto>> = use_signal(Vec::new);
+    let mut values: Signal<std::collections::HashMap<String, serde_json::Value>> =
+        use_signal(Default::default);
+    let mut error: Signal<Option<String>> = use_signal(|| None);
+    let mut busy = use_signal(|| false);
+    let mut refresh = use_signal(|| 0u32);
+
+    let load_state = app_state.clone();
+    use_effect(move || {
+        let _ = refresh.read();
+        let c = load_state.clone();
+        spawn(async move {
+            match c
+                .execute(GetUserMediaTrackers { user_id })
+                .await
+            {
+                Ok(t) => trackers.set(t),
+                Err(e) => {
+                    error.set(Some(format!("Failed to load media trackers: {e}")))
+                }
+            }
+        });
+    });
+
+    if trackers
+        .read()
+        .is_empty()
+    {
+        return rsx! {};
+    }
+
+    rsx! {
+        div { class: "field",
+            label { class: "field-label", "Media Trackers" }
+            span { class: "field-hint", "Send this user's watch activity and ratings to an external tracker." }
+            for t in trackers.read().clone() {
+                {
+                    let connected = t.status.is_some();
+                    let connect_state = app_state.clone();
+                    let disconnect_state = app_state.clone();
+                    let addon_id = t.addon_id;
+                    rsx! {
+                        div {
+                            key: "{addon_id}",
+                            style: "display:flex;flex-direction:column;gap:6px;padding:8px 0;border-bottom:1px solid var(--border)",
+                            div { style: "display:flex;align-items:center;gap:8px",
+                                strong { "{t.name}" }
+                                span { class: "field-hint", "{t.status.clone().unwrap_or_else(|| \"not connected\".into())}" }
+                            }
+                            if let Some(last) = t.last_error.clone() {
+                                span { class: "field-hint", style: "color:var(--error)", "{last}" }
+                            }
+                            if connected {
+                                button {
+                                    r#type: "button",
+                                    class: "btn btn-ghost",
+                                    style: "align-self:flex-start",
+                                    disabled: *busy.read(),
+                                    onclick: move |_| {
+                                        let c = disconnect_state.clone();
+                                        busy.set(true);
+                                        spawn(async move {
+                                            if let Err(e) = c.execute(DisconnectUserMediaTracker { user_id, addon_id }).await {
+                                                error.set(Some(format!("Failed to disconnect: {e}")));
+                                            }
+                                            busy.set(false);
+                                            let v = *refresh.peek() + 1;
+                                            refresh.set(v);
+                                        });
+                                    },
+                                    "Disconnect"
+                                }
+                            } else {
+                                for option in t.connect_fields.clone() {
+                                    super::addons::AddonOptionField { option, values }
+                                }
+                                button {
+                                    r#type: "button",
+                                    class: "btn btn-primary",
+                                    style: "align-self:flex-start",
+                                    disabled: *busy.read(),
+                                    onclick: move |_| {
+                                        let c = connect_state.clone();
+                                        let fields = serde_json::to_value(&*values.peek()).unwrap_or_default();
+                                        busy.set(true);
+                                        error.set(None);
+                                        spawn(async move {
+                                            match c.execute(ConnectUserMediaTracker { user_id, addon_id, fields }).await {
+                                                Ok(_) => values.set(Default::default()),
+                                                Err(e) => error.set(Some(format!("Failed to connect: {e}"))),
+                                            }
+                                            busy.set(false);
+                                            let v = *refresh.peek() + 1;
+                                            refresh.set(v);
+                                        });
+                                    },
+                                    "Connect"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(e) = error.read().as_ref() {
+                ErrorAlert { message: e.clone() }
             }
         }
     }

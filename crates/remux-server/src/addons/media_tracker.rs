@@ -195,6 +195,9 @@ pub struct MediaTrackerTarget {
     pub series: Option<Box<MediaTrackerTarget>>,
     pub season: Option<i64>,
     pub episode: Option<i64>,
+    /// In seconds, as `Media::runtime`. Lets providers that scrobble a
+    /// percentage turn `position_ticks` into one.
+    pub runtime: Option<i64>,
 }
 
 /// Whether any id here is one a media tracker could key on. `ExternalIds`
@@ -625,6 +628,7 @@ mod tests {
             series: None,
             season: None,
             episode: None,
+            runtime: None,
         }
     }
 

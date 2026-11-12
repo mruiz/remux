@@ -32,6 +32,7 @@ fn describe(media: &db::Media, series: Option<&db::Media>) -> MediaTrackerTarget
         series: series.map(|s| Box::new(describe(s, None))),
         season: media.parent_idx,
         episode: media.idx,
+        runtime: media.runtime,
     }
 }
 

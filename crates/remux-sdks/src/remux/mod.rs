@@ -7357,6 +7357,77 @@ impl Endpoint for SetUserAddons {
     }
 }
 
+/// One installed media tracker as seen by one user. `status` is `None` until
+/// the user connects it.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaTrackerDto {
+    pub addon_id: Uuid,
+    pub name: String,
+    pub connect_fields: Vec<AddonOption>,
+    pub status: Option<String>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GetUserMediaTrackers {
+    pub user_id: Uuid,
+}
+
+impl Endpoint for GetUserMediaTrackers {
+    type Output = Vec<MediaTrackerDto>;
+    fn path(&self) -> String {
+        format!("/remux/users/{}/mediatrackers", self.user_id)
+    }
+}
+
+/// `fields` holds the values for the tracker's `connect_fields`, by id.
+#[derive(Debug, Clone)]
+pub struct ConnectUserMediaTracker {
+    pub user_id: Uuid,
+    pub addon_id: Uuid,
+    pub fields: serde_json::Value,
+}
+
+impl Endpoint for ConnectUserMediaTracker {
+    type Output = MediaTrackerDto;
+    fn path(&self) -> String {
+        format!(
+            "/remux/users/{}/mediatrackers/{}",
+            self.user_id, self.addon_id
+        )
+    }
+    fn method(&self) -> Method {
+        Method::POST
+    }
+    fn body(&self) -> Body {
+        Body::Json(
+            self.fields
+                .clone(),
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DisconnectUserMediaTracker {
+    pub user_id: Uuid,
+    pub addon_id: Uuid,
+}
+
+impl Endpoint for DisconnectUserMediaTracker {
+    type Output = ();
+    fn path(&self) -> String {
+        format!(
+            "/remux/users/{}/mediatrackers/{}",
+            self.user_id, self.addon_id
+        )
+    }
+    fn method(&self) -> Method {
+        Method::DELETE
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamResolution {
