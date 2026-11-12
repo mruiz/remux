@@ -98,7 +98,10 @@ impl MdbListAddon {
         let resp = req
             .send()
             .await
-            .map_err(|e| MediaTrackerError::retryable(format!("mdblist: {e}")))?;
+            // The URL carries the API key, so it must not reach the logs.
+            .map_err(|e| {
+                MediaTrackerError::retryable(format!("mdblist: {}", e.without_url()))
+            })?;
         let status = resp.status();
         if status.is_success() {
             return Ok(());
