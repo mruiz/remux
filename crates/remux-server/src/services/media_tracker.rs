@@ -369,20 +369,7 @@ mod tests {
             .id
     }
 
-    /// The walk to the series follows `parent_id`, which an episode saved
-    /// without a season row above it does not have.
-    #[tokio::test]
-    async fn a_flat_episode_still_reaches_its_series() {
-        let (_s, guard) = new_test_server()
-            .await
-            .unwrap();
-        let ctx = &guard.0;
-
-        let external_ids = db::ExternalIds {
-            imdb: db::NonEmptyString::try_new("tt0306414".to_string()).ok(),
-            tmdb: Some(1438),
-            ..Default::default()
-        };
+    async fn save_series(ctx: &AppContext, external_ids: db::ExternalIds) -> db::Media {
         let mut series = db::Media {
             id: Uuid::from(&db::MediaIdRaw {
                 kind: db::MediaKind::Series,
@@ -399,6 +386,27 @@ mod tests {
             .save(&ctx.db)
             .await
             .unwrap();
+        series
+    }
+
+    /// The walk to the series follows `parent_id`, which an episode saved
+    /// without a season row above it does not have.
+    #[tokio::test]
+    async fn a_flat_episode_still_reaches_its_series() {
+        let (_s, guard) = new_test_server()
+            .await
+            .unwrap();
+        let ctx = &guard.0;
+
+        let series = save_series(
+            ctx,
+            db::ExternalIds {
+                imdb: db::NonEmptyString::try_new("tt0306414".to_string()).ok(),
+                tmdb: Some(1438),
+                ..Default::default()
+            },
+        )
+        .await;
 
         let mut episode = db::Media {
             title: "The Target".into(),
@@ -442,26 +450,14 @@ mod tests {
             .unwrap();
         let ctx = &guard.0;
 
-        let external_ids = db::ExternalIds {
-            tmdb: Some(1438),
-            ..Default::default()
-        };
-        let mut series = db::Media {
-            id: Uuid::from(&db::MediaIdRaw {
-                kind: db::MediaKind::Series,
-                external_ids: external_ids.clone(),
-                season: None,
-                episode: None,
-            }),
-            title: "The Wire".into(),
-            kind: db::MediaKind::Series,
-            external_ids,
-            ..Default::default()
-        };
-        series
-            .save(&ctx.db)
-            .await
-            .unwrap();
+        let series = save_series(
+            ctx,
+            db::ExternalIds {
+                tmdb: Some(1438),
+                ..Default::default()
+            },
+        )
+        .await;
 
         let mut season = db::Media {
             title: "Season 2".into(),
