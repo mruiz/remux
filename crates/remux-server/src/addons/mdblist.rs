@@ -16,11 +16,10 @@ use super::{
         MediaTrackerResult, MediaTrackerTarget, SyncDirection,
     },
 };
-use crate::db;
+use crate::{common::ticks_to_seconds, db};
 use remux_sdks::remux::{AddonOption, AddonOptionType};
 
 const BASE: &str = "https://api.mdblist.com";
-const TICKS_PER_SECOND: f64 = 10_000_000.0;
 
 pub struct MdbListPreset;
 
@@ -220,8 +219,7 @@ fn scrobble_body(target: &MediaTrackerTarget, progress: f64) -> Option<Value> {
 fn progress(target: &MediaTrackerTarget, position_ticks: i64) -> f64 {
     match target.runtime {
         Some(secs) if secs > 0 => {
-            (position_ticks as f64 / TICKS_PER_SECOND / secs as f64 * 100.0)
-                .clamp(0.0, 100.0)
+            (ticks_to_seconds(position_ticks) / secs as f64 * 100.0).clamp(0.0, 100.0)
         }
         _ => 0.0,
     }
