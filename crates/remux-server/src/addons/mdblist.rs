@@ -232,6 +232,64 @@ fn mdblist_rating(rating: f32) -> f64 {
     ((rating as f64 * 2.0).round() / 2.0).clamp(1.0, 10.0)
 }
 
+/// The endpoint and body an event maps to. `Ok(None)` when it needs no
+/// request: an unpaused progress tick, or an item MDBList cannot name.
+fn request(
+    event: &MediaTrackerEvent,
+    target: &MediaTrackerTarget,
+) -> MediaTrackerResult<Option<(&'static str, Value)>> {
+    let (path, body) = match event {
+        MediaTrackerEvent::PlaybackStart { position_ticks } => (
+            "/scrobble/start",
+            scrobble_body(target, progress(target, *position_ticks)),
+        ),
+        MediaTrackerEvent::PlaybackProgress {
+            position_ticks,
+            is_paused: true,
+        } => (
+            "/scrobble/pause",
+            scrobble_body(target, progress(target, *position_ticks)),
+        ),
+        // MDBList keeps a started session alive on its own; only pauses
+        // change its state.
+        MediaTrackerEvent::PlaybackProgress { .. } => return Ok(None),
+        MediaTrackerEvent::PlaybackStop {
+            position_ticks,
+            played,
+        } => {
+            // MDBList marks watched from 80%; `played` is remux's own call.
+            let p = if *played {
+                100.0
+            } else {
+                progress(target, *position_ticks).min(79.0)
+            };
+            ("/scrobble/stop", scrobble_body(target, p))
+        }
+        MediaTrackerEvent::MarkPlayed => (
+            "/sync/watched",
+            // Without a date MDBList skips items already watched once.
+            sync_body(
+                target,
+                json!({ "watched_at": chrono::Utc::now().to_rfc3339() }),
+            ),
+        ),
+        MediaTrackerEvent::MarkUnplayed => {
+            ("/sync/watched/remove", sync_body(target, json!({})))
+        }
+        MediaTrackerEvent::Rating { rating: Some(r) } => (
+            "/sync/ratings",
+            sync_body(target, json!({ "rating": mdblist_rating(*r) })),
+        ),
+        MediaTrackerEvent::Rating { rating: None } => {
+            ("/sync/ratings/remove", sync_body(target, json!({})))
+        }
+        MediaTrackerEvent::MarkFavorite | MediaTrackerEvent::UnmarkFavorite => {
+            return Err(MediaTrackerError::unsupported("favorites"));
+        }
+    };
+    Ok(body.map(|b| (path, b)))
+}
+
 #[async_trait]
 impl AddonKind for MdbListAddon {
     fn id(&self) -> &'static str {
@@ -311,56 +369,7 @@ impl MediaTrackerAddon for MdbListAddon {
         creds: &MediaTrackerCredentials,
         _ctx: &MediaTrackerCtx,
     ) -> MediaTrackerResult<()> {
-        let (path, body) = match event {
-            MediaTrackerEvent::PlaybackStart { position_ticks } => (
-                "/scrobble/start",
-                scrobble_body(target, progress(target, *position_ticks)),
-            ),
-            MediaTrackerEvent::PlaybackProgress {
-                position_ticks,
-                is_paused: true,
-            } => (
-                "/scrobble/pause",
-                scrobble_body(target, progress(target, *position_ticks)),
-            ),
-            // MDBList keeps a started session alive on its own; only pauses
-            // change its state.
-            MediaTrackerEvent::PlaybackProgress { .. } => return Ok(()),
-            MediaTrackerEvent::PlaybackStop {
-                position_ticks,
-                played,
-            } => {
-                // MDBList marks watched from 80%; `played` is remux's own call.
-                let p = if *played {
-                    100.0
-                } else {
-                    progress(target, *position_ticks).min(79.0)
-                };
-                ("/scrobble/stop", scrobble_body(target, p))
-            }
-            MediaTrackerEvent::MarkPlayed => (
-                "/sync/watched",
-                // Without a date MDBList skips items already watched once.
-                sync_body(
-                    target,
-                    json!({ "watched_at": chrono::Utc::now().to_rfc3339() }),
-                ),
-            ),
-            MediaTrackerEvent::MarkUnplayed => {
-                ("/sync/watched/remove", sync_body(target, json!({})))
-            }
-            MediaTrackerEvent::Rating { rating: Some(r) } => (
-                "/sync/ratings",
-                sync_body(target, json!({ "rating": mdblist_rating(*r) })),
-            ),
-            MediaTrackerEvent::Rating { rating: None } => {
-                ("/sync/ratings/remove", sync_body(target, json!({})))
-            }
-            MediaTrackerEvent::MarkFavorite | MediaTrackerEvent::UnmarkFavorite => {
-                return Err(MediaTrackerError::unsupported("favorites"));
-            }
-        };
-        let Some(body) = body else {
+        let Some((path, body)) = request(event, target)? else {
             return Ok(());
         };
         self.call(reqwest::Method::POST, path, apikey(creds)?, Some(body))
@@ -457,6 +466,47 @@ mod tests {
         assert_eq!(progress(&t, 50 * 10_000_000), 50.0);
         assert_eq!(progress(&t, 500 * 10_000_000), 100.0);
         assert_eq!(progress(&episode(), 50 * 10_000_000), 0.0);
+    }
+
+    #[test]
+    fn a_stop_marks_watched_only_when_remux_says_played() {
+        let stop = |played| {
+            request(
+                &MediaTrackerEvent::PlaybackStop {
+                    position_ticks: 90 * 10_000_000,
+                    played,
+                },
+                &movie(),
+            )
+            .unwrap()
+            .unwrap()
+        };
+        let (path, body) = stop(true);
+        assert_eq!(path, "/scrobble/stop");
+        assert_eq!(body["progress"], 100.0);
+        // 90% of the runtime, but remux did not count it: stay under MDBList's 80%.
+        assert_eq!(stop(false).1["progress"], 79.0);
+    }
+
+    #[test]
+    fn only_paused_progress_ticks_are_sent() {
+        let tick = |is_paused| {
+            request(
+                &MediaTrackerEvent::PlaybackProgress {
+                    position_ticks: 0,
+                    is_paused,
+                },
+                &movie(),
+            )
+            .unwrap()
+        };
+        assert!(tick(false).is_none());
+        assert_eq!(
+            tick(true)
+                .unwrap()
+                .0,
+            "/scrobble/pause"
+        );
     }
 
     #[test]
