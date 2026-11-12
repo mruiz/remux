@@ -150,7 +150,8 @@ fn apikey(creds: &MediaTrackerCredentials) -> MediaTrackerResult<&str> {
 }
 
 /// MDBList accepts imdb, tmdb and tvdb; Kitsu and the rest mean nothing to it.
-fn ids_json(ids: &db::ExternalIds) -> Value {
+/// `None` when none of those is set, since MDBList rejects an empty `ids`.
+fn ids_json(ids: &db::ExternalIds) -> Option<Value> {
     let mut out = serde_json::Map::new();
     if let Some(imdb) = &ids.imdb {
         out.insert("imdb".into(), json!(imdb.as_ref()));
@@ -161,17 +162,17 @@ fn ids_json(ids: &db::ExternalIds) -> Value {
     if let Some(tvdb) = ids.tvdb {
         out.insert("tvdb".into(), json!(tvdb));
     }
-    Value::Object(out)
+    (!out.is_empty()).then_some(Value::Object(out))
 }
 
 /// Body for the `/sync/*` endpoints, with `leaf` merged into the object that
 /// names the item itself (the episode, for an episode). `None` for kinds
-/// MDBList does not track.
+/// MDBList does not track, or items it has no id for.
 fn sync_body(target: &MediaTrackerTarget, leaf: Value) -> Option<Value> {
     let mut item = leaf;
     match target.kind {
         db::MediaKind::Movie | db::MediaKind::Series => {
-            item["ids"] = ids_json(&target.ids);
+            item["ids"] = ids_json(&target.ids)?;
             let key = if target.kind == db::MediaKind::Movie {
                 "movies"
             } else {
@@ -185,7 +186,7 @@ fn sync_body(target: &MediaTrackerTarget, leaf: Value) -> Option<Value> {
                 .as_ref()?;
             item["number"] = json!(target.episode?);
             Some(json!({ "shows": [{
-                "ids": ids_json(&series.ids),
+                "ids": ids_json(&series.ids)?,
                 "seasons": [{ "number": target.season?, "episodes": [item] }],
             }]}))
         }
@@ -194,16 +195,16 @@ fn sync_body(target: &MediaTrackerTarget, leaf: Value) -> Option<Value> {
 }
 
 /// Body for the `/scrobble/*` endpoints. `None` for kinds MDBList cannot
-/// scrobble.
+/// scrobble, or items it has no id for.
 fn scrobble_body(target: &MediaTrackerTarget, progress: f64) -> Option<Value> {
     let mut body = match target.kind {
-        db::MediaKind::Movie => json!({ "movie": { "ids": ids_json(&target.ids) } }),
+        db::MediaKind::Movie => json!({ "movie": { "ids": ids_json(&target.ids)? } }),
         db::MediaKind::Episode => {
             let series = target
                 .series
                 .as_ref()?;
             json!({ "show": {
-                "ids": ids_json(&series.ids),
+                "ids": ids_json(&series.ids)?,
                 "season": target.season?,
                 "episode": target.episode?,
             }})
@@ -437,6 +438,17 @@ mod tests {
         ep.series = None;
         assert!(sync_body(&ep, json!({})).is_none());
         assert!(scrobble_body(&ep, 0.0).is_none());
+    }
+
+    #[test]
+    fn an_item_with_only_a_kitsu_id_is_skipped() {
+        let mut m = movie();
+        m.ids = db::ExternalIds {
+            kitsu: Some(7442),
+            ..Default::default()
+        };
+        assert!(sync_body(&m, json!({})).is_none());
+        assert!(scrobble_body(&m, 0.0).is_none());
     }
 
     #[test]
