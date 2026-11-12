@@ -295,6 +295,10 @@ fn request(
             return Err(MediaTrackerError::unsupported("favorites"));
         }
     };
+    if body.is_none() {
+        // Otherwise a skipped item looks exactly like a delivered one.
+        tracing::warn!(kind = ?target.kind, title = %target.title, "mdblist: no MDBList id for this item, skipped");
+    }
     Ok(body.map(|b| (path, b)))
 }
 
